@@ -1,0 +1,564 @@
+---
+title: "Health40"
+author: "Renata Martins"
+date: "2024-04-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Pacotes utilizados
+```{r}
+library(bibliometrix) 
+library(bibtex) 
+library(bib2df) 
+library(dplyr) 
+library(readxl) 
+library(RefManageR) 
+library(synthesisr) 
+library(xlsx)
+library(htmltools)
+library(sass)
+library(xfun)
+library(radiant.data)
+library(reshape2)
+library(data.table)
+library(tidyr)
+library(ggraph)
+library(bc3net)
+library(openxlsx)
+```
+
+
+# Unificando arquivos .bib extraídos da WoS
+```{r}
+
+#path_to_bib_files <- list.files(".", pattern="\\.bib$", full.names=TRUE)
+
+#combined_bib <- ""
+#for (path_to_bib_file in path_to_bib_files) {
+  
+#  fileCon <- file(path_to_bib_file)
+#  content <- readLines(fileCon)
+#  close(fileCon)
+  
+#  combined_bib <- paste0(combined_bib, "\n", "\n", trimws(paste0(content, collapse="\n")))
+  
+#} 
+
+#cat(combined_bib, file="804_total.bib", "\n") 
+
+
+ biblioshiny()
+```
+
+
+# Criando o arquivo para ler no biblioshiny
+```{r}
+#Lendo as duas bases
+M <- read_xls("data_1_2_3_selecionados.xls") 
+#316 obs, com 72 var
+
+Total_3 <- convert2df("804_total.bib", dbsource= "isi", format = "bibtex")
+#804 obs com 54 var
+
+
+
+#Fazendo o merge
+names(M)[71] <- "UT"
+
+M_UT <- M[71]
+M_UT$UT <- gsub(":", "", M_UT$UT)
+
+df <- Total_3 %>%
+  filter(UT %in% M_UT$UT) #342 obs com 54 var
+
+#Tirando os duplicados
+df2 <- df %>%
+  filter(!duplicated(UT))  #316 obs com 54 var
+
+cont_NA <- df2 %>%
+  count(PY)
+# 2018:2023 -> tópico muito recente
+
+#Removendo artigos publicados em 2024
+df3 <- df2 %>%
+    filter(PY<2024) #307 obs com 54 var
+
+
+
+#bib_back <- as.BibEntry(df2)
+#WriteBib(bib_back, file = "317_final.bib")
+
+#Salvando XLSX
+write.xlsx(df3, "307_final.xlsx")
+write.table(df3, file = "307_final.csv", row.names = FALSE, sep = ";")
+```
+
+
+
+# Network creation: keyword co-occurrence analysis
+```{r}
+df3 <- read.table("307_final.csv", sep = ";", header = TRUE)
+
+#Remover termos e fazer lista de sinônimos
+remove.terms <- c("INDUSTRY 4.0","HEALTH 4.0", "HEALTHCARE 4.0", "PHARMA 4.0")
+
+synonyms <- c("neural-network; neural-networks", 
+              "neural-network; convolutional neural-network",
+              "neural-network; convolutional neural-networks",
+              "supply chain; supply chain management",
+              "fault diagnosis; fault detection",
+              "iot; internet of things",
+              "big data; big data analytics",
+              "technologies; technology",
+              "systems; system")
+
+remove <- c("industry 4.0")
+```
+
+
+## Conceptual Structure Map
+```{r}
+CS_map <- conceptualStructure(df3, field = "ID", minDegree = 10, k.max = 10, stemming = FALSE, labelsize = 5, remove.terms=remove)
+plot(CS_map$graph_terms)
+
+```
+
+## Thematic Map
+```{r}
+
+
+#Conceptual Structure Map
+conceptual_structure <- conceptualStructure(df3, method="MCA", field = "ID", minDegree=10, stemming = TRUE, labelsize=5, remove.terms=remove.terms)
+
+
+
+#Thematic Map
+thematicmap <- thematicMap(df3, field = "ID", minfreq =10, stemming = TRUE, size = 0.5, repel = TRUE, remove.terms=remove.terms, synonyms=synonyms, n.labels=5)
+
+plot(thematicmap$map) 
+```
+
+
+## Keyword co-occurrence
+```{r}
+keyword_matrix <- biblioNetwork(df3, analysis = "co-occurrences", network = "keywords", sep = ";", remove.terms=remove.terms, synonyms=synonyms)
+
+keyword_matrix_df <- as.matrix(keyword_matrix)
+
+keyword_matrix_df <- as.data.frame(keyword_matrix_df, stringsAsFactors = FALSE)
+
+keyword_matrix_df <- rownames_to_column(keyword_matrix_df, var = "id")
+
+graph_keyword_matrix <- networkPlot(keyword_matrix, n = 50, Title = "Keyword co-occurrence network", type = "fruchterman", labelsize=0.5, label.cex = TRUE, cluster="none", size=TRUE, size.cex = TRUE, remove.isolates = TRUE)
+
+cluster_graph_keyword_matrix <- networkPlot(keyword_matrix, n = 50, Title = "Keyword co-occurrence network", type = "fruchterman", labelsize=1, label.cex = TRUE, cluster="louvain", size=TRUE, size.cex = TRUE, remove.isolates = TRUE)
+```
+
+
+# Network creation: document x keywords
+
+```{r}
+palavras_indesejadas <- c("0", "INDUSTRY 4", "HEALTHCARE 4", "HEALTH 4", "PHARMA 4", 
+                  "INDUSTRY 4.0", "HEALTHCARE 4.0", "HEALTH 4.0", "PHARMA 4.0",
+                  "HEALTHCARE", "INDUSTRY 4 0", "HEALTHCARE 4 0", "HEALTH 4 0",
+                  "HEALTH 4.0;", "INDUSTRY 4.0;")
+
+sinonimos <- list("INTERNET OF THINGS" = "IOT",
+                 "INTERNET OF THINGS" = "INTERNET OF THINGS (IOT)",
+                 "INTERNET OF THINGS" = "(IOT)",
+                 "IOT" = "(IOT)",
+                 "SUPPLY CHAIN" = "SUPPLY CHAIN MANAGEMENT",
+                 "FAULT DIAGNOSIS" = "FAULT DETECTION",
+                 "BIG DATA" = "BIG DATA ANALYTICS",
+                 "TECHNOLOGY" = "TECHNOLOGIES",
+                 "SYSTEM" = "SYSTEMS",
+                 "3D PRINTING" = "ADDITIVE MANUFACTURING",
+                 "MACHINE LEARNING" = "MACHINE LEARNING (ML)",
+                 "HEALTHCARE" = "HEALTH CARE",
+                 "HEALTHCARE" = "CARE",
+                 "ARTIFICIAL INTELLIGENCE" = "INTELLIGENCE")
+
+
+limpar_de <- function(texto) {
+  # Separar as palavras-chave em uma lista
+  palavras <- unlist(strsplit(texto, "; "))
+  
+  # Remover palavras indesejadas
+  palavras <- palavras[!palavras %in% palavras_indesejadas]
+  
+  # Substituir sinônimos
+  for (sin in names(sinonimos)) {
+    palavras[palavras == sin] <- sinonimos[[sin]]
+  }
+  
+  # Juntar a lista de palavras de volta em uma string
+  novo_texto <- paste(palavras, collapse = "; ")
+  
+  return(novo_texto)
+}
+
+df3$DE <- sapply(df3$DE, limpar_de)
+```
+
+```{r}
+doc_keyword_matrix <- cocMatrix(df3, Field = "DE", binary = T)
+
+df_doc_keyword_matrix <- as.matrix(doc_keyword_matrix)
+
+#df_doc_keyword_matrix <- as.data.frame(df_doc_keyword_matrix, stringsAsFactors = FALSE)
+
+#df_doc_keyword_matrix$V1 <- NULL
+
+sq_doc_keyword_matrix <- df_doc_keyword_matrix %*% t(df_doc_keyword_matrix)
+
+df_sq_doc_keyword_matrix <- as.matrix(sq_doc_keyword_matrix)
+
+df_sq_doc_keyword_matrix <- as.data.frame(df_sq_doc_keyword_matrix, stringsAsFactors = FALSE)
+
+n <- nrow(df_sq_doc_keyword_matrix)
+
+# Set diagonal elements to 0
+df_sq_doc_keyword_matrix[cbind(1:n, 1:n)] <- 0
+
+df_sq_doc_keyword_matrix_2 <- rownames_to_column(df_sq_doc_keyword_matrix, var = "id")
+
+long_df_sq_doc_keyword_matrix <- gather(df_sq_doc_keyword_matrix_2)
+long_df_sq_doc_keyword_matrix <- melt(setDT(df_sq_doc_keyword_matrix_2), id.vars = c("id"), variable.name = "Pair", value.name = "Keywords")
+
+sq_doc_keyword_matrix |> 
+  igraph::graph_from_adjacency_matrix(mode = "undirected", weighted = NULL, diag = F) |>
+  igraph::simplify() |>
+  tidygraph::as_tbl_graph() -> 
+  sq_doc_keyword_matrix_graph
+
+sq_doc_keyword_matrix_graph |>
+  tidygraph::activate(nodes) |>
+  dplyr:: mutate(Index = row_number()) ->
+  sq_doc_keyword_matrix_graph
+
+  ggraph(sq_doc_keyword_matrix_graph, layout = "fr") +
+  geom_edge_link(aes(size = 0.05)) +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = -1) +
+  theme_void()
+  
+  write_graph(sq_doc_keyword_matrix_graph, "307_graph.graphml", format = "graphml")
+```
+
+## Giant component
+```{r}
+gcc <- getgcc(sq_doc_keyword_matrix_graph)
+
+save(gcc, file = "gcc.RData")
+
+write_graph(gcc, "gcc_graph.graphml", format = "graphml")
+```
+
+
+
+## Clusterization
+```{r}
+#louvain <- cluster_louvain(gcc)
+#não pode mais ficar rodando
+
+V(gcc)$community <- membership(louvain)
+write_graph(gcc, "louvain_graph.graphml", format = "graphml")
+```
+
+
+### Salvando
+```{r}
+write.table(keyword_matrix_df, file = "keyword_matrix_df.csv", row.names = FALSE, sep = ";")
+write.table(df_doc_keyword_matrix, file = "df_doc_keyword_matrix.csv", row.names = FALSE, sep = ";")
+write.table(df_sq_doc_keyword_matrix, file = "df_sq_doc_keyword_matrix.csv", row.names = FALSE, sep = ";")
+write.table(long_df_sq_doc_keyword_matrix, file = "long_df_sq_doc_keyword_matrix.csv", row.names = FALSE, sep = ";")
+
+save(df_doc_keyword_matrix, file = "df_doc_keyword_matrix.RData")
+save(df_sq_doc_keyword_matrix, file = "df_sq_doc_keyword_matrix.RData")
+
+save(louvain, file = "louvain.RData")
+```
+
+
+```{r}
+membership_louvain <- membership(louvain)
+
+node_groups <- as.factor(membership_louvain)
+
+layout <- layout_with_fr(gcc)
+
+#plot (comp, layout = layout, vertex.color = membership_louvain, vertex.label = NA, group = membership_louvain)
+
+ggraph(gcc, layout = layout) +
+  geom_edge_link(aes(size = 0.05), color = "white") +
+  geom_node_point(aes(color = node_groups)) +
+  geom_node_text(aes(label = NA)) +
+  theme_void()
+```
+
+
+```{r}
+clusters_louvain <- data.frame(Node = V(gcc)$name, Cluster = as.numeric(membership_louvain))
+
+sum_clusters_louvain <- clusters_louvain %>% 
+  group_by(Cluster) %>% 
+  summarise(n = n())
+```
+
+```{r}
+write.table(clusters_louvain, file = "clusters_louvain.csv", row.names = FALSE, sep = ";")
+write.csv(sum_clusters_louvain, file = "sum_clusters_louvain.csv", row.names = FALSE)
+```
+
+# Análise descritiva por cluster: document x keywords
+```{r}
+#df3 <- read.table("307_final.csv", sep = ";", header = TRUE)
+
+# Criando um index para cruzar
+
+Nomes <- read.xlsx("307_final.xlsx", sheet = "Sheet1")
+
+Nomes1 <- Nomes[, c("UT", "NA."), drop = FALSE]
+
+
+df4 <- merge(df3, Nomes1, by = "UT", all = TRUE)
+
+
+names(df4)[55] <- "Node"
+
+
+
+df3_filtered_cluster <- merge(df4, clusters_louvain, by = "Node")
+  
+write.xlsx(df3_filtered_cluster, "df3_filtered_clusters_louvain.xlsx")
+```
+
+
+
+## Filtrando por cluster
+```{r}
+
+df3_filtered_cluster <- read.xlsx("df3_filtered_cluster_louvain.xlsx")
+
+cluster1 <- filter(df3_filtered_cluster, Cluster == 1)
+cluster2 <- filter(df3_filtered_cluster, Cluster == 2)
+cluster3 <- filter(df3_filtered_cluster, Cluster == 3)
+cluster4 <- filter(df3_filtered_cluster, Cluster == 4)
+cluster5 <- filter(df3_filtered_cluster, Cluster == 5)
+cluster6 <- filter(df3_filtered_cluster, Cluster == 6)
+cluster7 <- filter(df3_filtered_cluster, Cluster == 7)
+```
+
+```{r}
+write.csv(cluster1, file = "cluster1.csv", row.names = FALSE)
+write.csv(cluster2, file = "cluster2.csv", row.names = FALSE)
+write.csv(cluster3, file = "cluster3.csv", row.names = FALSE)
+write.csv(cluster4, file = "cluster4.csv", row.names = FALSE)
+write.csv(cluster5, file = "cluster5.csv", row.names = FALSE)
+write.csv(cluster6, file = "cluster6.csv", row.names = FALSE)
+write.csv(cluster7, file = "cluster7.csv", row.names = FALSE)
+```
+
+## Análise descritiva por cluster
+```{r}
+results1 <- biblioAnalysis(cluster1, sep=';')
+results2 <- biblioAnalysis(cluster2, sep=';')
+results3 <- biblioAnalysis(cluster3, sep=';')
+results4 <- biblioAnalysis(cluster4, sep=';')
+results5 <- biblioAnalysis(cluster5, sep=';')
+results6 <- biblioAnalysis(cluster6, sep=';')
+results7 <- biblioAnalysis(cluster7, sep=';')
+
+
+summary1 <- summary(results1)
+summary2 <- summary(results2) 
+summary3 <- summary(results3) 
+summary4 <- summary(results4) 
+summary5 <- summary(results5) 
+summary6 <- summary(results6) 
+summary7 <- summary(results7)
+
+ano_cluster1 <-summary1$AnnualProduction
+ano_cluster2 <-summary2$AnnualProduction
+ano_cluster3 <-summary3$AnnualProduction
+ano_cluster4 <-summary4$AnnualProduction
+ano_cluster5 <-summary5$AnnualProduction
+ano_cluster6 <-summary6$AnnualProduction
+ano_cluster7 <-summary7$AnnualProduction
+
+
+
+```
+
+### Top authors
+```{r}
+top_authors_1 <- summary1$MostProdAuthors
+top_authors_2 <- summary2$MostProdAuthors
+top_authors_3 <- summary3$MostProdAuthors
+top_authors_4 <- summary4$MostProdAuthors
+top_authors_5 <- summary5$MostProdAuthors
+top_authors_6 <- summary6$MostProdAuthors
+top_authors_7 <- summary7$MostProdAuthors
+```
+
+### Top cited papers
+```{r}
+top_cited_papers_1 <- summary1$MostCitedPapers
+top_cited_papers_2 <- summary2$MostCitedPapers
+top_cited_papers_3 <- summary3$MostCitedPapers
+top_cited_papers_4 <- summary4$MostCitedPapers
+top_cited_papers_5 <- summary5$MostCitedPapers
+top_cited_papers_6 <- summary6$MostCitedPapers
+top_cited_papers_7 <- summary7$MostCitedPapers
+```
+
+### Top countries
+```{r}
+top_countries_1 <- summary1$MostProdCountries
+top_countries_2 <- summary2$MostProdCountries
+top_countries_3 <- summary3$MostProdCountries
+top_countries_4 <- summary4$MostProdCountries
+top_countries_5 <- summary5$MostProdCountries
+top_countries_6 <- summary6$MostProdCountries
+top_countries_7 <- summary7$MostProdCountries
+
+top_countries_citation_1 <- summary1$TCperCountries
+top_countries_citation_2 <- summary2$TCperCountries
+top_countries_citation_3 <- summary3$TCperCountries
+top_countries_citation_4 <- summary4$TCperCountries
+top_countries_citation_5 <- summary5$TCperCountries
+top_countries_citation_6 <- summary6$TCperCountries
+top_countries_citation_7 <- summary7$TCperCountries
+```
+
+
+### Top sources
+```{r}
+top_sources_1 <- summary1$MostRelSources
+top_sources_2 <- summary2$MostRelSources
+top_sources_3 <- summary3$MostRelSources
+top_sources_4 <- summary4$MostRelSources
+top_sources_5 <- summary5$MostRelSources
+top_sources_6 <- summary6$MostRelSources
+top_sources_7 <- summary7$MostRelSources
+
+top_cited_sources_1 <- aggregate(TC ~ SO, cluster1, sum)
+top_cited_sources_2 <- aggregate(TC ~ SO, cluster2, sum)
+top_cited_sources_3 <- aggregate(TC ~ SO, cluster3, sum)
+top_cited_sources_4 <- aggregate(TC ~ SO, cluster4, sum)
+top_cited_sources_5 <- aggregate(TC ~ SO, cluster5, sum)
+top_cited_sources_6 <- aggregate(TC ~ SO, cluster6, sum)
+top_cited_sources_7 <- aggregate(TC ~ SO, cluster7, sum)
+```
+
+### Top keywords
+```{r}
+top_keywords_1 <- summary1$MostRelKeywords
+top_keywords_2 <- summary2$MostRelKeywords
+top_keywords_3 <- summary3$MostRelKeywords
+top_keywords_4 <- summary4$MostRelKeywords
+top_keywords_5 <- summary5$MostRelKeywords
+top_keywords_6 <- summary6$MostRelKeywords
+top_keywords_7 <- summary7$MostRelKeywords
+```
+
+
+#### Salvando resultados
+
+```{r}
+total_clusters <- 7
+
+# Pasta onde os arquivos serão salvos
+subfolder <- "tables_clusters_louvain"
+
+# Create the subfolder
+dir.create(subfolder, showWarnings = FALSE)
+
+for (i in 1:total_clusters) {
+  
+  # Adicionar sufixo com base em i
+  sufixo <- i
+  
+  # Nomes das variáveis
+  top_authors_i <- get(paste0("top_authors_", i))
+  top_cited_papers_i <- get(paste0("top_cited_papers_", i))
+  top_cited_sources_i <- get(paste0("top_cited_sources_", i))
+  top_countries_i <- get(paste0("top_countries_", i))
+  top_countries_citation_i <- get(paste0("top_countries_citation_", i))
+  top_keywords_i <- get(paste0("top_keywords_", i))
+  top_sources_i <- get(paste0("top_sources_", i))
+  
+  # Criar o workbook
+  wbi <- createWorkbook()
+  
+  # Adicionar dataframes às abas do arquivo
+  addWorksheet(wbi, paste0("Top_Authors_", sufixo))
+  writeData(wbi, paste0("Top_Authors_", sufixo), top_authors_i)
+  
+  addWorksheet(wbi, paste0("Top_cited_p_", sufixo))
+  writeData(wbi, paste0("Top_cited_p_", sufixo), top_cited_papers_i)
+  
+  addWorksheet(wbi, paste0("Top_cited_s_", sufixo))
+  writeData(wbi, paste0("Top_cited_s_", sufixo), top_cited_sources_i)
+  
+  addWorksheet(wbi, paste0("Top_Countries_", sufixo))
+  writeData(wbi, paste0("Top_Countries_", sufixo), top_countries_i)
+  
+  addWorksheet(wbi, paste0("Top_Countries_cit_", sufixo))
+  writeData(wbi, paste0("Top_Countries_cit_", sufixo), top_countries_citation_i)
+  
+  addWorksheet(wbi, paste0("Top_keywords_", sufixo))
+  writeData(wbi, paste0("Top_keywords_", sufixo), top_keywords_i)
+  
+  addWorksheet(wbi, paste0("Top_sources_", sufixo))
+  writeData(wbi, paste0("Top_sources_", sufixo), top_sources_i)
+  
+  # Salvar o arquivo
+  saveWorkbook(wbi, file = file.path(subfolder, paste0("Cluster_", sufixo, "_desc.xlsx")), overwrite = TRUE)
+}
+```
+
+# Identificação dos Hubs
+```{r}
+get_hub <- read_xlsx("df3_filtered_cluster_louvain.xlsx")
+
+estat_cluster <- get_hub %>%
+  group_by(Cluster) %>%
+  summarise(
+    media_TC = mean(TC, na.rm = TRUE),
+    sd_TC = sd(TC, na.rm = TRUE)
+  )
+
+get_hub_normalizado <- get_hub %>%
+  left_join(estat_cluster, by = "Cluster") %>%
+  mutate(
+    TC_normalizado = (TC - media_TC) / sd_TC
+  ) %>%
+  select(-media_TC, -sd_TC)
+
+
+hubs <- get_hub_normalizado[get_hub_normalizado$TC_normalizado >= 2.5, ]
+
+
+
+
+
+
+
+
+
+##########################################
+m_TC <- mean(get_hub$TC)
+sd_TC <- sd(get_hub$TC)
+
+get_hub$n_TC <- (get_hub$TC - m_TC) / sd_TC
+
+hubs1 <- get_hub[get_hub$n_TC >= 2.5, ]
+
+```
+
